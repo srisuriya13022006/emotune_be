@@ -12,9 +12,9 @@ CORS(app, resources={r"/predict": {"origins": "*"}}, supports_credentials=True)
 
 logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s - %(message)s')
 
-# Gemini setup
+# === Gemini setup ===
 logging.info("Setting up Gemini API...")
-genai.configure(api_key=os.getenv("AIzaSyB7QIqPNg89yzr-t3msQANz13gbOsNh3BI"))
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))  # Gemini API key from Render env
 model = genai.GenerativeModel("gemini-1.5-pro")
 logging.info("Gemini API configured.")
 
@@ -78,30 +78,31 @@ def predict():
         file.save(file_path)
         logging.info(f"Saved uploaded audio to {file_path}")
 
-        # === Send file to Hugging Face Gradio Space ===
-        logging.info("Sending audio file to Hugging Face Space...")
-        hf_url = "https://srisuriyas-emotune-audio-model.hf.space/run/predict"
+        # === Send audio to Hugging Face Inference API ===
+        logging.info("Sending audio file to Hugging Face Inference API...")
+        hf_api_url = "https://api-inference.huggingface.co/models/ehcalabres/wav2vec2-lg-xlsr-en-speech-emotion-recognition"
+        hf_headers = {
+            "Authorization": f"Bearer {os.getenv('HF_API_TOKEN')}"
+        }
 
         with open(file_path, "rb") as f:
-            payload = {
-                "data": [("temp.wav", f, "audio/wav")]
-            }
-            # NOTE: requests-toolbelt could be used here for complex cases, but Gradio accepts simple multipart/form-data
-            files = {
-                 "data": ("temp.wav", f, "audio/wav")
-                    }
+            audio_data = f.read()
 
+        response = requests.post(hf_api_url, headers=hf_headers, data=audio_data)
 
-            response = requests.post(hf_url, files=files)
-        
-        logging.info(f"HF Space responded with status {response.status_code}")
         if response.status_code != 200:
-            logging.error(f"HF Space response error: {response.text}")
-            return jsonify({'error': 'Failed to get emotion from HF Space'}), 500
+            logging.error(f"HF API response error {response.status_code}: {response.text}")
+            return jsonify({'error': 'Failed to get emotion from HF API'}), 500
 
-        hf_json = response.json()
-        emotion = hf_json.get("data", [""])[0].lower()
-        logging.info(f"Received emotion from HF Space: {emotion}")
+        try:
+            hf_result = response.json()
+            logging.info(f"HF API response: {hf_result}")
+            # Get top predicted emotion
+            emotion = hf_result[0]["label"].lower()
+            logging.info(f"Predicted emotion: {emotion}")
+        except Exception as e:
+            logging.error("Failed to parse Hugging Face response", exc_info=True)
+            return jsonify({'error': 'Error parsing HF API response'}), 500
 
         # === Get recommendations from Gemini ===
         recommendations = get_gemini_recommendations(emotion)
