@@ -14,7 +14,7 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s - %(
 
 # Gemini setup
 logging.info("Setting up Gemini API...")
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))
+genai.configure(api_key=os.getenv("AIzaSyB7QIqPNg89yzr-t3msQANz13gbOsNh3BI"))
 model = genai.GenerativeModel("gemini-1.5-pro")
 logging.info("Gemini API configured.")
 
@@ -51,8 +51,10 @@ Return only the JSON response and nothing else.
         content = response.text.strip()
         match = re.search(r'\{.*\}', content, re.DOTALL)
         if match:
+            logging.info("Parsed Gemini response successfully.")
             return json.loads(match.group(0))
         else:
+            logging.warning("No JSON object found in Gemini response.")
             return {"books": [], "music": [], "movies": []}
     except Exception as e:
         logging.error(f"Gemini API error: {e}")
@@ -61,27 +63,37 @@ Return only the JSON response and nothing else.
 # === API route ===
 @app.route('/predict', methods=['POST'])
 def predict():
-    logging.info("Received REST prediction request.")
+    logging.info("==> /predict endpoint hit")
     try:
         if 'file' not in request.files:
+            logging.warning("No file part found in request.")
             return jsonify({'error': 'No file part'}), 400
+
         file = request.files['file']
         if file.filename == '':
+            logging.warning("File part is empty.")
             return jsonify({'error': 'No selected file'}), 400
 
         file_path = "temp.wav"
         file.save(file_path)
+        logging.info(f"Saved uploaded audio to {file_path}")
 
         # Send file to Hugging Face Space
+        logging.info("Sending audio file to Hugging Face Space...")
         with open(file_path, "rb") as f:
             files = {"data": f}
             hf_response = requests.post("https://srisuriyas-emotune-audio-model.hf.space/run/predict", files=files)
 
+        logging.info(f"HF Space responded with status {hf_response.status_code}")
         if hf_response.status_code != 200:
+            logging.error(f"HF Space response error: {hf_response.text}")
             return jsonify({'error': 'Failed to get emotion from HF Space'}), 500
 
         emotion = hf_response.json()["data"][0].lower()
+        logging.info(f"Received emotion from HF Space: {emotion}")
+
         recommendations = get_gemini_recommendations(emotion)
+        logging.info("Successfully generated recommendations.")
 
         return jsonify({
             "emotion": emotion,
@@ -89,7 +101,7 @@ def predict():
         })
 
     except Exception as e:
-        logging.error(f"Prediction error: {e}")
+        logging.error("Prediction error occurred", exc_info=True)
         return jsonify({'error': str(e)}), 500
 
 if __name__ == '__main__':
