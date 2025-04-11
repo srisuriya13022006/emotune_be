@@ -78,22 +78,38 @@ def predict():
         file.save(file_path)
         logging.info(f"Saved uploaded audio to {file_path}")
 
-        # Send file to Hugging Face Space
+        # === Send file to Hugging Face Gradio Space ===
         logging.info("Sending audio file to Hugging Face Space...")
-        with open(file_path, "rb") as f:
-            files = {"data": f}
-            hf_response = requests.post("https://srisuriyas-emotune-audio-model.hf.space/run/predict", files=files)
+        hf_url = "https://srisuriyas-emotune-audio-model.hf.space/api/predict"
 
-        logging.info(f"HF Space responded with status {hf_response.status_code}")
-        if hf_response.status_code != 200:
-            logging.error(f"HF Space response error: {hf_response.text}")
+        with open(file_path, "rb") as f:
+            payload = {
+                "data": [("temp.wav", f, "audio/wav")]
+            }
+            # NOTE: requests-toolbelt could be used here for complex cases, but Gradio accepts simple multipart/form-data
+            files = {
+                "data": f
+            }
+
+            response = requests.post(hf_url, files=files)
+        
+        logging.info(f"HF Space responded with status {response.status_code}")
+        if response.status_code != 200:
+            logging.error(f"HF Space response error: {response.text}")
             return jsonify({'error': 'Failed to get emotion from HF Space'}), 500
 
-        emotion = hf_response.json()["data"][0].lower()
+        hf_json = response.json()
+        emotion = hf_json.get("data", [""])[0].lower()
         logging.info(f"Received emotion from HF Space: {emotion}")
 
+        # === Get recommendations from Gemini ===
         recommendations = get_gemini_recommendations(emotion)
         logging.info("Successfully generated recommendations.")
+
+        # Cleanup temp file
+        if os.path.exists(file_path):
+            os.remove(file_path)
+            logging.info(f"Removed temporary file: {file_path}")
 
         return jsonify({
             "emotion": emotion,
