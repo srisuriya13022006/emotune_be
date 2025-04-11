@@ -80,7 +80,7 @@ def predict():
 
         # === Send file to Hugging Face Gradio Space ===
         logging.info("Sending audio file to Hugging Face Space...")
-        hf_url = "https://srisuriyas-emotune-audio-model.hf.space/api/predict"
+        hf_url = "https://srisuriyas-emotune-audio-model.hf.space/run/predict"
 
         with open(file_path, "rb") as f:
             payload = {
@@ -88,8 +88,9 @@ def predict():
             }
             # NOTE: requests-toolbelt could be used here for complex cases, but Gradio accepts simple multipart/form-data
             files = {
-                "data": f
-            }
+                 "data": ("temp.wav", f, "audio/wav")
+                    }
+
 
             response = requests.post(hf_url, files=files)
         
