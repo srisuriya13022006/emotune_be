@@ -1,11 +1,14 @@
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-import requests
-import json
-import re
 import logging
 import os
+import json
+import re
 import google.generativeai as genai
+from transformers import pipeline
+import torch
+import librosa
+import soundfile as sf
 
 app = Flask(__name__)
 CORS(app, resources={r"/predict": {"origins": "*"}}, supports_credentials=True)
@@ -14,9 +17,19 @@ logging.basicConfig(level=logging.INFO, format='[%(asctime)s] %(levelname)s - %(
 
 # === Gemini setup ===
 logging.info("Setting up Gemini API...")
-genai.configure(api_key=os.getenv("GEMINI_API_KEY"))  # Gemini API key from Render env
+genai.configure(api_key=os.getenv("GEMINI_API_KEY"))  # Set GEMINI_API_KEY in Render env
 model = genai.GenerativeModel("gemini-1.5-pro")
 logging.info("Gemini API configured.")
+
+# === Load local model pipeline once ===
+logging.info("Loading local emotion classification model...")
+classifier = pipeline(
+    "audio-classification",
+    model="ehcalabres/wav2vec2-lg-xlsr-en-speech-emotion-recognition",
+    framework="pt",
+    device=0 if torch.cuda.is_available() else -1
+)
+logging.info("Local model loaded successfully.")
 
 # === Gemini recommendation logic ===
 def get_gemini_recommendations(emotion):
@@ -74,44 +87,35 @@ def predict():
             logging.warning("File part is empty.")
             return jsonify({'error': 'No selected file'}), 400
 
-        file_path = "temp.wav"
-        file.save(file_path)
-        logging.info(f"Saved uploaded audio to {file_path}")
+        original_path = "temp.wav"
+        converted_path = "temp_converted.wav"
+        file.save(original_path)
+        logging.info(f"Saved uploaded audio to {original_path}")
 
-        # === Send audio to Hugging Face Inference API ===
-        logging.info("Sending audio file to Hugging Face Inference API...")
-        hf_api_url = "https://api-inference.huggingface.co/models/ehcalabres/wav2vec2-lg-xlsr-en-speech-emotion-recognition"
-        hf_headers = {
-            "Authorization": f"Bearer {os.getenv('HF_API_TOKEN')}"
-        }
+        # === Convert audio for local classification ===
+        y, sr = librosa.load(original_path, sr=None)
+        y_resampled = librosa.resample(y, orig_sr=sr, target_sr=16000)
+        if y_resampled.ndim > 1:
+            y_resampled = y_resampled.mean(axis=0)
 
-        with open(file_path, "rb") as f:
-            audio_data = f.read()
+        sf.write(converted_path, y_resampled, 16000)
+        logging.info(f"Audio resampled and saved to {converted_path}")
 
-        response = requests.post(hf_api_url, headers=hf_headers, data=audio_data)
+        # === Run local model inference ===
+        result = classifier(converted_path)
+        logging.info(f"Model result: {result}")
+        emotion = result[0]["label"].lower()
+        logging.info(f"Predicted emotion: {emotion}")
 
-        if response.status_code != 200:
-            logging.error(f"HF API response error {response.status_code}: {response.text}")
-            return jsonify({'error': 'Failed to get emotion from HF API'}), 500
-
-        try:
-            hf_result = response.json()
-            logging.info(f"HF API response: {hf_result}")
-            # Get top predicted emotion
-            emotion = hf_result[0]["label"].lower()
-            logging.info(f"Predicted emotion: {emotion}")
-        except Exception as e:
-            logging.error("Failed to parse Hugging Face response", exc_info=True)
-            return jsonify({'error': 'Error parsing HF API response'}), 500
-
-        # === Get recommendations from Gemini ===
+        # === Generate recommendations ===
         recommendations = get_gemini_recommendations(emotion)
-        logging.info("Successfully generated recommendations.")
+        logging.info("Recommendations fetched successfully.")
 
-        # Cleanup temp file
-        if os.path.exists(file_path):
-            os.remove(file_path)
-            logging.info(f"Removed temporary file: {file_path}")
+        # === Cleanup ===
+        for path in [original_path, converted_path]:
+            if os.path.exists(path):
+                os.remove(path)
+                logging.info(f"Removed temp file: {path}")
 
         return jsonify({
             "emotion": emotion,
